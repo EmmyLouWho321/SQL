@@ -1,0 +1,57 @@
+--- FINAL CODE, post immediate year after digital integration
+
+CREATE OR REPLACE table temp.roi_results as
+SELECT
+    x.BrandId,
+    x.BrandName,
+    CASE WHEN bb.Biosimilar_BrandID IS NOT NULL THEN 1 ELSE 0 END as BioSim,
+    SUM(CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END) AS Pre_AP_Events,
+    SUM(CASE WHEN x.FirstVisit BETWEEN DATE_ADD(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END) AS Post_AP_Events,
+    COUNT(DISTINCT CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN CONCAT(x.patientid, x.practiceid) END) AS Pre_AP_Patients,
+    COUNT(DISTINCT CASE WHEN x.FirstVisit BETWEEN DATE_ADD(b.digital_integration_date, 365) AND b.digital_integration_date THEN CONCAT(x.patientid, x.practiceid) END) AS Post_AP_Patients,
+
+    SUM(CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END) / COUNT(DISTINCT CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN CONCAT(x.patientid, x.practiceid) END) AS Pre_AP_Events_Per_Patient,
+    
+    SUM(CASE WHEN x.FirstVisit BETWEEN DATE_ADD(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END)  / COUNT(DISTINCT CASE WHEN x.FirstVisit BETWEEN DATE_ADD(b.digital_integration_date, 365) AND b.digital_integration_date THEN CONCAT(x.patientid, x.practiceid) END) AS Post_AP_Events_Per_Patient,
+
+    SUM(CASE WHEN x.FirstVisit BETWEEN DATE_ADD(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END) - SUM(CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END) AS Difference_Events,
+
+    (SUM(CASE WHEN x.FirstVisit BETWEEN DATE_ADD(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END) / COUNT(DISTINCT CASE WHEN x.FirstVisit BETWEEN DATE_ADD(b.digital_integration_date, 365) AND b.digital_integration_date THEN CONCAT(x.patientid, x.practiceid) END)) - 
+    (SUM(CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END) / COUNT(DISTINCT CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN CONCAT(x.patientid, x.practiceid) END)) AS Difference_Events_Per_Patient
+FROM datascience.brand_jcode_xref b
+LEFT JOIN hive_metastore.ds_brands_drugs.brand_biosimilar_xref bb
+  ON  bb.brandID = b.BrandID
+JOIN (
+    SELECT
+        pm.PatientId,
+        pm.PracticeId,
+        ba.BrandName,
+        ba.BrandId,
+        MIN(pm.VisitDateOfService) AS FirstVisit,
+        COUNT(DISTINCT pm.ticketnumber) AS TotalEvents
+    FROM hive_metastore.cdm.vw_payment_master_full pm
+    LEFT JOIN datascience.brand_attributes ba
+    ON instr(ba.externalcodes_all, pm.externalprocedurecode) > 0
+    WHERE
+        pm.RecordType IN (3, 4)
+        AND pm.ClaimType IN ('P', 'M')
+        AND pm.PracticeId NOT IN (1, 3, 13, 18, 100, 341, 455)
+        AND UPPER(LEFT(pm.practicename, 2)) NOT IN ('XX', 'ZZ')
+    GROUP BY pm.PatientId, pm.PracticeId, ba.BrandName, ba.BrandId
+) x ON x.BrandId = b.brandid
+JOIN (
+    SELECT
+    PracticeId,
+    MIN(visitdateofservice) as PracticeFirstVisit
+    FROM hive_metastore.cdm.vw_payment_master_full 
+    WHERE ClaimType IN ('P', 'M')
+      AND PracticeId NOT IN (1, 3, 13, 18, 100, 341, 455)
+      AND UPPER(LEFT(practicename, 2)) NOT IN ('XX', 'ZZ')
+    GROUP BY 1
+) pr
+ON pr.PracticeId = x.PracticeId
+WHERE b.digital_integration_date IS NOT NULL
+    AND YEAR(b.digital_integration_date) <> '2999'
+    AND UPPER(b.ManufacturerName) LIKE '%GENENTECH%'
+    AND pr.PracticeFirstVisit < DATE_SUB(b.digital_integration_date, 365)
+GROUP BY 1,2,3

@@ -1,0 +1,62 @@
+/*TREATMENT DURATION
+By manufacturer and Brand: Do patients receiving FA (Pre and post AP at the practice level) have, on average, longer treatments or higher rates of treatment completion?
+
+can we use administered 'endreason' as a...filter? another dependent variable?
+was patient pre or post AP camp (calc # of treatments)
+One year before and after integration at the practice
+did the patients start during that time frame*/
+
+SELECT
+    b.ManufacturerName,
+    b.ManufacturerID,
+    x.BrandId,
+    x.BrandName,
+    b.hasgeneric_flag,
+    b.biosimilar_flag,
+    SUM(CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END) AS Pre_AP_Events,
+    SUM(CASE WHEN x.FirstVisit > b.digital_integration_date AND x.FirstVisit BETWEEN '2023-06-30' AND '2024-06-30' THEN x.TotalEvents ELSE 0 END) AS Post_AP_Events,
+    COUNT(DISTINCT CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN CONCAT(x.patientid, x.practiceid) END) AS Pre_AP_Patients,
+    COUNT(DISTINCT CASE WHEN x.FirstVisit > b.digital_integration_date AND x.FirstVisit BETWEEN '2023-06-30' AND '2024-06-30' THEN CONCAT(x.patientid, x.practiceid) END) AS Post_AP_Patients,
+    SUM(CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END) / COUNT(DISTINCT CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN CONCAT(x.patientid, x.practiceid) END) AS Pre_AP_Events_Per_Patient,
+    SUM(CASE WHEN x.FirstVisit > b.digital_integration_date AND x.FirstVisit BETWEEN '2023-06-30' AND '2024-06-30' THEN x.TotalEvents ELSE 0 END) / COUNT(DISTINCT CASE WHEN x.FirstVisit > b.digital_integration_date AND x.FirstVisit BETWEEN '2023-06-30' AND '2024-06-30' THEN CONCAT(x.patientid, x.practiceid) END) AS Post_AP_Events_Per_Patient,
+    SUM(CASE WHEN x.FirstVisit > b.digital_integration_date AND x.FirstVisit BETWEEN '2023-06-30' AND '2024-06-30' THEN x.TotalEvents ELSE 0 END) - SUM(CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END) AS Difference_Events,
+    (SUM(CASE WHEN x.FirstVisit > b.digital_integration_date AND x.FirstVisit BETWEEN '2023-06-30' AND '2024-06-30' THEN x.TotalEvents ELSE 0 END) / COUNT(DISTINCT CASE WHEN x.FirstVisit > b.digital_integration_date AND x.FirstVisit BETWEEN '2023-06-30' AND '2024-06-30' THEN CONCAT(x.patientid, x.practiceid) END)) - 
+    (SUM(CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN x.TotalEvents ELSE 0 END) / COUNT(DISTINCT CASE WHEN x.FirstVisit BETWEEN DATE_SUB(b.digital_integration_date, 365) AND b.digital_integration_date THEN CONCAT(x.patientid, x.practiceid) END)) AS Difference_Events_Per_Patient
+FROM datascience.brand_jcode_xref b
+JOIN (
+    SELECT
+        pm.PatientId,
+        pm.PracticeId,
+        CASE WHEN ps.dateofdeath iS NULL THEN 'No' ELSE 'Yes' END as Passed ,
+        ba.BrandName,
+        ba.BrandId,
+        MIN(pm.VisitDateOfService) AS FirstVisit,
+        COUNT(DISTINCT pm.ticketnumber) AS TotalEvents
+    FROM hive_metastore.cdm.vw_payment_master_full pm
+    LEFT JOIN datascience.brand_attributes ba
+    ON instr(ba.externalcodes_all, pm.externalprocedurecode) > 0
+    LEFT JOIN hive_metastore.datascience.patient_summary ps
+    ON ps.patientid = pm.PatientId
+      AND ps.practiceid = pm.PracticeId
+    WHERE
+        pm.RecordType IN (3, 4)
+        AND pm.ClaimType IN ('P', 'M')
+        AND pm.PracticeId NOT IN (1, 3, 13, 18, 100, 341, 455)
+        AND UPPER(LEFT(pm.practicename, 2)) NOT IN ('XX', 'ZZ')
+    GROUP BY 1,2,3,4,5
+) x ON x.BrandId = b.brandid
+JOIN (
+    SELECT
+    PracticeId,
+    MIN(visitdateofservice) as PracticeFirstVisit
+    FROM hive_metastore.cdm.vw_payment_master_full 
+    WHERE ClaimType IN ('P', 'M')
+      AND PracticeId NOT IN (1, 3, 13, 18, 100, 341, 455)
+      AND UPPER(LEFT(practicename, 2)) NOT IN ('XX', 'ZZ')
+    GROUP BY 1
+) pr
+ON pr.PracticeId = x.PracticeId
+WHERE b.digital_integration_date IS NOT NULL
+    AND YEAR(b.digital_integration_date) <> '2999'
+    AND pr.PracticeFirstVisit < DATE_SUB(b.digital_integration_date, 365)
+GROUP BY 1,2,3,4,5,6

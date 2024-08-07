@@ -1,0 +1,49 @@
+--brandid 156 brandid 1463
+--How many scripts were there were Revlimid was searched in Assistpoint, but Lenalidomide was given to patient via claims data */
+
+
+--- what does the field externalcode_analysis_flag (in payment master) denote?
+--- is there a difference between left join and left outer join in databricks?
+--- / why would a search type be null? --- button clicked for application...part of what needs to be filtered out 
+--- can patient ids be duplicated for different practices?
+
+select count(distinct ap_patientid) as revlimid_pts,
+       count(distinct a.ap_searchID) as rev_searches,
+       count(distinct a.cl_patientid) as len_pts,
+       count(distinct case when len_charge_after_enrollment = 'Yes' then concat(practiceid, cl_patientid, ExternalAwardNumber) else null end) as num_claims_after_enrollment,
+       sum(case when len_charge_after_enrollment = 'Yes' then ChargeAmount else null end) as claim_amount_after_enrollment,
+       avg(case when len_charge_after_enrollment = 'Yes' then ChargeAmount else null end) as claim_avg_after_enrollment
+from (  --- merging searches & claims
+      select distinct enr.practiceid,
+             enr.patientid as ap_patientid,
+             cl.patientid as cl_patientid,
+             enr.BillableSearchID as ap_searchid,
+             enr.CreatedOn,
+             VisitDateOfService,
+             cl.ExternalAwardNumber,
+             cl.ChargeAmount,
+             case when cl.VisitDateOfService is not null and enr.CreatedOn <= cl.VisitDateOfService then 'Yes' else 'No' end as len_charge_after_enrollment
+      from (  --- grabbing searches
+            select a.practiceid
+            , a.patientid
+           , a.CreatedOn
+           , a.BillableSearchID
+            from dbo.vw_rpt_activitylogpivot a
+            where BrandID = 156 and
+                  a.PracticeID not in (3,13,100) and ---filter out AP demo practices
+                   a.SearchType NOT IN ('Auto Re-Enrollment', 'Re-Enrollment') 
+                  and IFNULL(a.isBackloaded , False) <> true
+                  and a.BillableSearchID is not null
+                  and a.CreatedOn>='2022-03-07'
+             ) enr
+      left outer join --grabbing claims
+          (
+            select distinct id, practiceid, patientid, VisitDateOfService, ExternalAwardNumber, ChargeAmount, TransactionDate-- PaymentAmount
+            from hive_metastore.cdm.cdm_payment_master_bulk_load
+            where DrugCode IN ('00480124228', '00480124328', '00480124421', '00480124621') and
+                  RecordType in (4) --- EA Note: Only need 3 (charges)
+          ) cl
+      on enr.practiceid = cl.practiceid and
+        enr.patientid = cl.patientid
+     ) a  
+order by 1,2,4
